@@ -11,7 +11,7 @@ import "./index.css"; // Tailwind styles
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <Router>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/signin" element={<SignIn />} />
@@ -19,6 +19,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/signup" element={<SignUp/>} />
       
       </Routes>
-    </BrowserRouter>
+    </Router>
   </React.StrictMode>
 );
