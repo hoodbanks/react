@@ -5,6 +5,7 @@ import SignIn from "./pages/SignIn";
 import Contact from "./pages/Contact";
 import SignUp from "./pages/SignUP";
 
+
 function App() {
   return (
     <div className="">
@@ -46,6 +47,8 @@ function App() {
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp/>} />
          <Route path="/vendorlist" element={<Vendorlist/>} />
+         
+
       </Routes>
     </div>
   );

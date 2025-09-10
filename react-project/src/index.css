@@ -1,1 +1,15 @@
 @import "tailwindcss";
+
+@keyframes rise { 0% {opacity:0; transform:translateY(12px)} 100% {opacity:1; transform:translateY(0)} }
+@keyframes pop  { 0% {opacity:0; transform:scale(.96)} 100% {opacity:1; transform:scale(1)} }
+@keyframes fade { 0% {opacity:0} 100% {opacity:1} }
+@keyframes ink  { 0% {transform:scaleX(0)} 100% {transform:scaleX(1)} }
+
+.animate-rise       { animation: rise .50s ease-out both }
+.animate-rise-slow  { animation: rise .65s ease-out both }
+.animate-pop        { animation: pop  .32s ease-out both }
+.animate-fade       { animation: fade .45s ease-out both }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
