@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 /* ================= CONFIG ================= */
 const API_BASE = import.meta.env.VITE_API_BASE || "";
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY; // your key
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY; // your key in .env
 const LIBRARIES = ["places"];
 
 /* ================= HELPERS ================= */
@@ -39,7 +39,7 @@ function gmapsDirectionsUrl(destLat, destLng, origin) {
   return `https://www.google.com/maps/dir/?${qs.toString()}`;
 }
 
-/* ======== FRONTEND SANITIZER (removes price/earnings fields) ======== */
+/* ======== FRONTEND SANITIZER (hides money fields) ======== */
 const SENSITIVE_KEY_REGEX =
   /^(payout|price|amount|fare|tip|earnings|commission|total|subTotal|subtotal|riderEarning|orderTotal)$/i;
 
@@ -48,24 +48,36 @@ function deepSanitize(obj) {
   if (obj && typeof obj === "object") {
     const out = {};
     for (const [k, v] of Object.entries(obj)) {
-      if (SENSITIVE_KEY_REGEX.test(k)) continue; // drop sensitive keys
+      if (SENSITIVE_KEY_REGEX.test(k)) continue;
       out[k] = deepSanitize(v);
     }
     return out;
   }
   return obj;
 }
-function sanitizeOrders(list = []) {
-  return deepSanitize(list);
+const sanitizeOrders = (list = []) => deepSanitize(list);
+const sanitizeOrder = (order = {}) => deepSanitize(order);
+
+/* ======== PICKUP CODE / ORDER ID HELPERS ======== */
+function getPickupCode(order = {}) {
+  const code =
+    order.vendorOrderCode ||
+    order.orderCode ||
+    order.pickupCode ||
+    order.productCode ||
+    order.orderRef ||
+    order.reference;
+  if (code) return String(code).toUpperCase();
+  return order.id ? String(order.id).slice(-6).toUpperCase() : "—";
 }
-function sanitizeOrder(order = {}) {
-  return deepSanitize(order);
+function shortId(order = {}) {
+  return order.id ? `#${String(order.id).slice(-6).toUpperCase()}` : "";
 }
 
 /* ============ FALLBACK ORDERS (demo) ============ */
 const DEMO_ORDERS = [
   {
-    id: "o1",
+    id: "o1-A",
     category: "Restaurant",
     storeName: "Candles",
     storeLat: 6.2234,
@@ -78,6 +90,24 @@ const DEMO_ORDERS = [
     dropAddress: "36 Bisalla Rd, Enugu",
     items: "2x Jollof Rice, 1x Grilled Chicken",
     deliveryCode: "8421",
+    vendorOrderCode: "CND-2874",
+  },
+  // Same restaurant, different order id -> will appear as a separate card in Active
+  {
+    id: "o1-B",
+    category: "Restaurant",
+    storeName: "Candles",
+    storeLat: 6.2234,
+    storeLng: 7.1175,
+    storeAddress: "18 Ogui Rd, Enugu",
+    customerName: "Ifeoma",
+    customerPhone: "+2348012345678",
+    dropLat: 6.2262,
+    dropLng: 7.1221,
+    dropAddress: "12 Abakaliki Rd, Enugu",
+    items: "1x Fried Rice, 1x Beef Suya",
+    deliveryCode: "3355",
+    vendorOrderCode: "CND-2875",
   },
   {
     id: "o2",
@@ -93,35 +123,20 @@ const DEMO_ORDERS = [
     dropAddress: "15 Zik Ave, Uwani",
     items: "Groceries (5 items)",
     deliveryCode: "5530",
-  },
-  {
-    id: "o3",
-    category: "Pharmacy",
-    storeName: "PharmaPlus",
-    storeLat: 6.2234,
-    storeLng: 7.1175,
-    storeAddress: "Independence Layout",
-    customerName: "Ngozi",
-    customerPhone: "+2348033333333",
-    dropLat: 6.2221,
-    dropLng: 7.113,
-    dropAddress: "10 Chime Ave",
-    items: "OTC meds (2 items)",
-    deliveryCode: "1906",
+    vendorOrderCode: "RBM-1042",
   },
 ];
 
 /* ================= MAIN ================= */
 export default function Dashboard() {
   const navigate = useNavigate();
-
   const riderName =
     localStorage.getItem("riderName") ||
     localStorage.getItem("riderEmail") ||
     "Rider";
 
   const [tab, setTab] = useState("Available");
-  const tabs = ["Available", "Active", "History", "Settings"];
+  const tabsBase = ["Available", "Active", "History", "Settings"];
 
   // location state
   const [address, setAddress] = useState(() => localStorage.getItem("riderAddress") || "");
@@ -132,7 +147,6 @@ export default function Dashboard() {
   const [mapsReady, setMapsReady] = useState(false);
   useEffect(() => localStorage.setItem("riderAddress", address), [address]);
   useEffect(() => localStorage.setItem("riderLocation", JSON.stringify(riderLoc)), [riderLoc]);
-
   const autocompleteRef = useRef(null);
 
   // availability + subscription
@@ -148,7 +162,8 @@ export default function Dashboard() {
   // data
   const [loading, setLoading] = useState(true);
   const [availableOrders, setAvailableOrders] = useState([]);
-  // multiple active orders + persistence (sanitized)
+
+  // ✅ multiple active orders + persistence
   const [activeOrders, setActiveOrders] = useState(() => {
     const raw = localStorage.getItem("riderActiveOrders");
     return raw ? sanitizeOrders(JSON.parse(raw)) : [];
@@ -158,10 +173,14 @@ export default function Dashboard() {
     return raw ? sanitizeOrders(JSON.parse(raw)) : [];
   });
 
-  useEffect(() => localStorage.setItem("riderActiveOrders", JSON.stringify(sanitizeOrders(activeOrders))), [activeOrders]);
-  useEffect(() => localStorage.setItem("riderHistory", JSON.stringify(sanitizeOrders(history))), [history]);
+  useEffect(() => {
+    localStorage.setItem("riderActiveOrders", JSON.stringify(sanitizeOrders(activeOrders)));
+  }, [activeOrders]);
+  useEffect(() => {
+    localStorage.setItem("riderHistory", JSON.stringify(sanitizeOrders(history)));
+  }, [history]);
 
-  // code modal (for a specific order)
+  // code modal
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [codeTarget, setCodeTarget] = useState(null);
   const [codeInput, setCodeInput] = useState("");
@@ -224,7 +243,7 @@ export default function Dashboard() {
     }
   };
 
-  // Use current location
+  // Use current location (click 📍)
   const useCurrent = () => {
     if (!navigator.geolocation) return alert("Geolocation not supported.");
     const okDev = /^((localhost|127\.0\.0\.1)(:\d+)?)$/.test(location.host);
@@ -260,7 +279,7 @@ export default function Dashboard() {
     );
   };
 
-  // accept order — add to active list (no duplicates, sanitized)
+  // ✅ accept order — each unique id becomes its own Active card
   async function acceptOrder(order) {
     let apiOk = true;
     if (API_BASE) {
@@ -316,14 +335,13 @@ export default function Dashboard() {
       }
     }
 
-    // move from active to history (sanitized)
     const safeCompleted = sanitizeOrder(codeTarget);
     setHistory((h) => [{ ...safeCompleted, completedAt: new Date().toISOString() }, ...h]);
     setActiveOrders((list) => list.filter((o) => o.id !== codeTarget.id));
     setShowCodeModal(false);
     setCodeTarget(null);
     setCodeInput("");
-    setTab("Active"); // stay on Active to finish others
+    setTab("Active");
     if (!apiOk && API_BASE) alert("Backend not ready — delivery completed locally.");
   }
 
@@ -336,6 +354,15 @@ export default function Dashboard() {
     localStorage.removeItem("riderVehicle");
     navigate("/signin", { replace: true });
   }
+
+  // Dynamic tab labels with counts
+  const tabs = useMemo(() => {
+    return tabsBase.map((t) => {
+      if (t === "Active") return `Active (${activeOrders.length})`;
+      if (t === "History") return `History (${history.length})`;
+      return t;
+    });
+  }, [tabsBase, activeOrders.length, history.length]);
 
   return (
     <main className="min-h-screen bg-[#F7F9F5]">
@@ -398,17 +425,22 @@ export default function Dashboard() {
         {/* Tabs */}
         <div className="max-w-6xl mx-auto px-4 pb-3">
           <div className="flex gap-2 justify-evenly overflow-x-auto no-scrollbar">
-            {tabs.map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`px-4 py-2 rounded-full text-sm ${
-                  tab === t ? "bg-white text-[#1b5e20]" : "bg-white/15 text-white"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+            {tabs.map((label) => {
+              const key = label.startsWith("Active") ? "Active" : label.split(" ")[0];
+              return (
+                <button
+                  key={label}
+                  onClick={() => setTab(key)}
+                  className={`px-4 py-2 rounded-full text-sm ${
+                    (tab === key || (tab === "Active" && label.startsWith("Active")))
+                      ? "bg-white text-[#1b5e20]"
+                      : "bg-white/15 text-white"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
       </header>
@@ -463,6 +495,7 @@ export default function Dashboard() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
+                          <div className="text-xs text-[#0F3D2E]/60">{shortId(o)}</div>
                           <div className="text-sm text-[#0F3D2E]/70">{o.category}</div>
                           <div className="text-lg font-semibold text-[#0F3D2E]">{o.storeName}</div>
                           <div className="text-sm text-[#0F3D2E]/70">{o.storeAddress}</div>
@@ -522,11 +555,53 @@ export default function Dashboard() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
+                        <div className="text-xs text-[#0F3D2E]/60">{shortId(order)}</div>
                         <div className="text-sm text-[#0F3D2E]/70">{order.category}</div>
                         <h3 className="text-xl font-semibold text-[#0F3D2E]">
                           {order.storeName}
                         </h3>
                         <div className="text-sm text-[#0F3D2E]/70">{order.storeAddress}</div>
+                      </div>
+                    </div>
+
+                    {/* Pickup details */}
+                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-medium text-amber-900/80 uppercase tracking-wide">
+                            Vendor Order Code
+                          </div>
+                          <div className="text-lg font-bold text-amber-900 tracking-wider">
+                            {getPickupCode(order)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const code = getPickupCode(order);
+                            if (navigator.clipboard?.writeText) {
+                              navigator.clipboard.writeText(code);
+                              alert("Code copied");
+                            } else {
+                              prompt("Copy code:", code);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-sm bg-amber-100 hover:bg-amber-200 text-amber-900"
+                          type="button"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <div className="mt-2 text-sm text-amber-900/90">
+                        <div className="font-medium">Items to pick:</div>
+                        {Array.isArray(order.items) ? (
+                          <ul className="list-disc ml-5">
+                            {order.items.map((it, i) => (
+                              <li key={i}>{typeof it === "string" ? it : JSON.stringify(it)}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div>{order.items}</div>
+                        )}
                       </div>
                     </div>
 
@@ -601,6 +676,7 @@ export default function Dashboard() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
+                        <div className="text-xs text-[#0F3D2E]/60">{shortId(h)}</div>
                         <div className="text-sm text-[#0F3D2E]/70">{h.category}</div>
                         <div className="text-lg font-semibold text-[#0F3D2E]">{h.storeName}</div>
                         <div className="text-sm text-[#0F3D2E]/70">{h.dropAddress}</div>
