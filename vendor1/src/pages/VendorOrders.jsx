@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { markOrdersSeen } from "../lib/orderNotifications";
 
-
 const VENDOR_ID = localStorage.getItem("vendorId") || "vendor123";
 const ORDERS_KEY = `vendor_orders_${VENDOR_ID}`;
+const VERSION_KEY = `vendor_orders_version_${VENDOR_ID}`;
+const SEED_VERSION = 2; // bump this to force auto-reseed
 
 const fmtNaira = (n) => "₦" + Number(n || 0).toLocaleString();
 const hhmm = (iso) =>
@@ -15,48 +16,84 @@ function isToday(iso) {
   return d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate();
 }
 
+// ---- seed helper (10 orders, no delivery fee) ----
+function buildSeed(now) {
+  const mk = (minsAgo, status, items) => {
+    const createdAt = new Date(now - minsAgo * 60 * 1000).toISOString();
+    const itemsTotal = items.reduce((s, it) => s + it.price * it.qty, 0);
+    return {
+      id: (window.crypto?.randomUUID?.() || String(now - minsAgo * 60 * 1000)),
+      code: "YV-" + Math.random().toString(36).slice(2, 8).toUpperCase(),
+      createdAt,
+      status,
+      items,
+      total: itemsTotal, // items only
+      deliveryCode: String(Math.floor(100000 + Math.random() * 900000)),
+    };
+  };
+
+  return [
+    mk(3,  "New",               [{ title: "Shawarma (Chicken)", qty: 1, price: 2500 }]),
+    mk(8,  "Preparing",         [
+      { title: "Jollof Rice & Chicken", qty: 1, price: 1800 },
+      { title: "Malt 33cl",              qty: 1, price: 800  },
+    ]),
+    mk(15, "Preparing",         [{ title: "Grilled Fish", qty: 1, price: 4500 }]),
+    mk(22, "Out for delivery",  [
+      { title: "Ogbono Soup", qty: 2, price: 1300 },
+      { title: "Fufu",        qty: 2, price: 400  },
+    ]),
+    mk(28, "Out for delivery",  [
+      { title: "Pharmacy: Paracetamol 500mg", qty: 2, price: 300 },
+      { title: "Water 75cl",                  qty: 1, price: 300 },
+    ]),
+    mk(40, "Completed",         [
+      { title: "Jollof Rice & Chicken", qty: 1, price: 1800 },
+      { title: "Malt 33cl",              qty: 1, price: 800  },
+    ]),
+    mk(55, "Completed",         [{ title: "Cat Food 1kg", qty: 1, price: 3200 }]),
+    mk(75, "Cancelled",         [{ title: "Veggie Salad Bowl", qty: 1, price: 2200 }]),
+    mk(90, "Completed",         [{ title: "Yam & Egg Sauce",   qty: 1, price: 1600 }]),
+    mk(180,"New",               [{ title: "Pharmacy: Vitamin C", qty: 1, price: 900 }]),
+  ];
+}
+
 export default function VendorOrders() {
-    useEffect(() => {
-        markOrdersSeen();
-        }, []);
+  useEffect(() => { markOrdersSeen(); }, []);
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [tab, setTab] = useState("All");
   const [q, setQ] = useState("");
 
-  // Load / seed
+  const resetSeed = () => {
+    const seeded = buildSeed(Date.now());
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(seeded));
+    localStorage.setItem(VERSION_KEY, String(SEED_VERSION));
+    setOrders(seeded);
+  };
+
+  // Load / versioned seed (also respects ?seed=1)
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const forceSeed = params.get("seed") === "1";
+
     let list;
     try {
       list = JSON.parse(localStorage.getItem(ORDERS_KEY) || "[]");
       if (!Array.isArray(list)) list = [];
     } catch { list = []; }
 
-    if (list.length === 0) {
-      const now = Date.now();
-      const mk = (minsAgo, status, items, deliveryFee = 0) => {
-        const createdAt = new Date(now - minsAgo * 60 * 1000).toISOString();
-        const itemsTotal = items.reduce((s, it) => s + it.price * it.qty, 0);
-        return {
-          id: crypto.randomUUID?.() || String(now - minsAgo * 60 * 1000),
-          code: "YV-" + Math.random().toString(36).slice(2, 8).toUpperCase(),
-          createdAt,
-          status,
-          items,
-          deliveryFee,
-          total: itemsTotal + deliveryFee,
-          deliveryCode: String(Math.floor(100000 + Math.random() * 900000)),
-        };
-      };
-      list = [
-        mk(10, "Preparing", [{ title: "Jollof Rice & Chicken", qty: 1, price: 1800 }, { title: "Malt 33cl", qty: 1, price: 800 }]),
-        mk(35, "Out for delivery", [{ title: "Ogbono Soup", qty: 2, price: 1300 }], 500),
-        mk(70, "Completed", [{ title: "Dog Food", qty: 1, price: 1500 }]),
-      ];
-      localStorage.setItem(ORDERS_KEY, JSON.stringify(list));
-    }
+    const currentVersion = localStorage.getItem(VERSION_KEY);
+    const shouldReseed = forceSeed || list.length === 0 || currentVersion !== String(SEED_VERSION);
 
-    setOrders(list);
+    if (shouldReseed) {
+      const seeded = buildSeed(Date.now());
+      localStorage.setItem(ORDERS_KEY, JSON.stringify(seeded));
+      localStorage.setItem(VERSION_KEY, String(SEED_VERSION));
+      setOrders(seeded);
+    } else {
+      setOrders(list);
+    }
   }, []);
 
   const save = (next) => {
@@ -72,6 +109,7 @@ export default function VendorOrders() {
     let list = orders.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     if (tab === "Today") list = list.filter((o) => isToday(o.createdAt));
     if (tab === "Preparing") list = list.filter((o) => o.status === "Preparing");
+    // "Out for delivery" tab removed from nav; keep logic here in case you set it programmatically.
     if (tab === "Out for delivery") list = list.filter((o) => o.status === "Out for delivery");
     if (tab === "Completed") list = list.filter((o) => o.status === "Completed");
     if (tab === "Cancelled") list = list.filter((o) => o.status === "Cancelled");
@@ -80,23 +118,28 @@ export default function VendorOrders() {
       list = list.filter(
         (o) =>
           (o.code || "").toLowerCase().includes(s) ||
-          (o.items || []).some((it) => it.title.toLowerCase().includes(s))
+          (o.items || []).some((it) => (it.title || "").toLowerCase().includes(s))
       );
     }
     return list;
   }, [orders, tab, q]);
 
+  // Labels unchanged; "Mark Out for delivery" still completes the order (from earlier change)
   const nextLabel = (status) =>
     status === "Preparing" ? "Mark Out for delivery"
       : status === "Out for delivery" ? "Complete"
       : status === "New" ? "Start preparing"
       : null;
 
+  // Preparing -> Completed (skip "Out for delivery")
   const advance = (o) => {
     if (o.status === "New") return setStatus(o.id, "Preparing");
-    if (o.status === "Preparing") return setStatus(o.id, "Out for delivery");
+    if (o.status === "Preparing") return setStatus(o.id, "Completed");
     if (o.status === "Out for delivery") return setStatus(o.id, "Completed");
   };
+
+  const fmtItemsTotal = (o) =>
+    (o.items || []).reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1), 0);
 
   return (
     <main className="min-h-screen bg-[#F7F9F5]">
@@ -104,14 +147,23 @@ export default function VendorOrders() {
         <div className="max-w-screen-lg mx-auto px-4 py-4 flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="text-xl">←</button>
           <h1 className="text-2xl font-bold text-[#1b5e20]">Orders</h1>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-3">
             <NavLink to="/orders/today" className="text-sm text-[#1b5e20] underline">
               Today’s Orders
             </NavLink>
+            {/* Dev-only reset */}
+            <button
+              onClick={resetSeed}
+              className="text-sm px-3 py-1 rounded-lg border bg-white hover:bg-gray-50"
+              title="Reset and reseed 10 sample orders"
+            >
+              Reset sample orders
+            </button>
           </div>
         </div>
         <div className="max-w-screen-lg mx-auto px-4 pb-4 flex flex-wrap gap-2">
-          {["All","Today","Preparing","Out for delivery","Completed","Cancelled"].map((t) => {
+          {/* ⬇️ "Out for delivery" removed from nav */}
+          {["All","Today","Preparing","Completed","Cancelled"].map((t) => {
             const active = tab === t;
             return (
               <button
@@ -140,12 +192,7 @@ export default function VendorOrders() {
         ) : (
           <div className="space-y-3">
             {filtered.map((o) => {
-              const itemsTotal = (o.items || []).reduce(
-                (s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1), 0
-              );
-              const deliveryFee = Number(o.deliveryFee) || 0;
-              const total = typeof o.total === "number" ? o.total : itemsTotal + deliveryFee;
-
+              const total = typeof o.total === "number" ? o.total : fmtItemsTotal(o);
               return (
                 <article
                   key={o.id}
@@ -153,21 +200,22 @@ export default function VendorOrders() {
                 >
                   <div className="min-w-0">
                     <div className="text-sm text-gray-500">{hhmm(o.createdAt)}</div>
-                    <div className="font-semibold text-[#0F3D2E]">
-                      {o.code} • <span className="text-[#1b5e20]">{fmtNaira(total)}</span>
-                    </div>
+                    <div className="font-semibold text-[#0F3D2E]">{o.code}</div>
                     <ul className="mt-1 text-sm text-[#0F3D2E]">
                       {(o.items || []).map((it, i) => (
                         <li key={i}>
-                          {it.title} × {it.qty} <span className="text-[#0F3D2E]/60">({fmtNaira(it.price)})</span>
+                          {it.title} × {it.qty}{" "}
+                          <span className="text-[#0F3D2E]/60">({fmtNaira(it.price)})</span>
                         </li>
                       ))}
                     </ul>
-                    {deliveryFee > 0 && (
-                      <div className="text-xs text-gray-600 mt-1">
-                        Delivery: <b>{fmtNaira(deliveryFee)}</b>
-                      </div>
-                    )}
+                    <div className="mt-2 pt-2 border-t border-gray-100 text-sm">
+                      <span className="text-gray-600">Total:</span>{" "}
+                      <b className="text-[#1b5e20]">{fmtNaira(total)}</b>
+                      <span className="text-gray-500 ml-2">
+                        • {(o.items || []).length} item{(o.items || []).length === 1 ? "" : "s"}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="text-right shrink-0 w-40">
